@@ -1,73 +1,165 @@
-# Edge Appliance glossary
+# Edge Appliance Architecture Terminology
 
-This starter glossary defines Kubernetes and operator terms used when discussing
-Edge Appliance work in UCK. It deliberately avoids product-specific behavior
-that is not implemented or documented in this repository. Extend it as the
-Edge Appliance API and its resources are defined.
+This is a living reference for the terminology used throughout the Edge Appliance architecture series.
 
-## Adapter
+The definitions describe the current architectural model. They are intentionally implementation-agnostic and may evolve as the model develops.
 
-The code that translates between a Custom Resource and an external API. In UCK,
-each managed kind provides an adapter to the generic reconciler. See
-Adding a kind.
+## Air-gapped Edge Appliance
 
-## Adoption
+An Edge Appliance designed to be deployed and operated in a Target Environment without relying on continuous connectivity to external systems.
 
-Associating an existing external resource with a Custom Resource when the
-resource's external identifier is not yet recorded in status. UCK adapters may
-adopt resources using the Kubernetes object's UID label when the external API
-supports labels.
+The architecture must assume that artifacts, dependencies, lifecycle logic, configuration contracts, and verification information required for deployment are available within the air-gapped boundary or are explicitly guaranteed by the Target Environment.
 
-## Condition
+## Layer
 
-A structured status entry that records the current state of a Custom Resource,
-such as whether it is ready or reconciliation has failed.
+An independently owned architectural part of the product with its own lifecycle, pipeline, version, and responsibilities.
 
-## Custom Resource
+The current model uses three primary Layers:
 
-A Kubernetes object defined by a Custom Resource Definition. A Custom Resource
-contains the desired configuration in `spec` and may expose observed state in
-`status`.
+- Infrastructure
+- Platform
+- Application
 
-## Custom Resource Definition
+The exact boundaries are product-specific.
 
-A Kubernetes API extension, commonly abbreviated as CRD, that defines a Custom
-Resource's schema, group, version, and kind.
+## Infrastructure Layer
 
-## Deletion policy
+The Layer responsible for the infrastructure capabilities required by the product.
 
-A setting that controls what happens to an external resource when its Custom
-Resource is deleted. Supported policies and resource-specific behavior are
-documented in the resource reference.
+Depending on the Edge Appliance, this may include hardware-facing software, operating system artifacts, provisioning assets, firmware, compute, storage, networking, or other infrastructure capabilities.
 
-## External identifier
+## Platform Layer
 
-The stable value used to identify a resource in an external API, often a UUID or
-name. UCK records external identifiers in a Custom Resource's status.
+The Layer that provides the common runtime and platform capabilities consumed by the Application Layer.
 
-## Finalizer
+Its exact contents depend on the product and may include orchestration, supporting services, policies, storage capabilities, networking behavior, security capabilities, or other shared platform functionality.
 
-Metadata on a Kubernetes object that delays its removal until the responsible
-controller has completed required deletion handling.
+## Application Layer
 
-## Observe
+The Layer that contains the product-specific application capabilities and the supporting artifacts required to run them on the Platform Layer.
 
-The adapter operation that reads an external resource and determines whether it
-exists and matches the desired state. Observation must not change resources in
-the external API.
+## Layer Version
 
-## Reconciliation
+A specific, independently produced and identifiable version of a Layer.
 
-The controller loop that compares desired state from a Custom Resource with
-observed state and takes steps to bring them together.
+A Layer Version is created by that Layer's lifecycle and can participate in one or more Product Versions as long as the relevant compatibility contracts remain satisfied.
 
-## Secret
+## Product Version
 
-A Kubernetes object used for sensitive data. Credentials and connection details
-produced by UCK are written to Secrets owned by the relevant Custom Resource,
-not to status.
+A validated composition of specific Layer Versions.
 
-## Status
+A Product Version identifies which Infrastructure, Platform, and Application Layer Versions belong together and have been validated as a product.
 
-The part of a Custom Resource that reports observed state, including external
-identifiers and conditions. Status is not the source of desired configuration.
+A Product Version is a logical composition. It is not itself the physical deliverable.
+
+## Product Package
+
+The deliverable representation of a validated Product Version.
+
+A Product Package preserves the exact composition of the Product Version and carries the information, artifacts, dependencies, lifecycle capabilities, and verification material required to operate that composition in an air-gapped Target Environment.
+
+A Product Package does not define a new composition. It materializes one that has already been defined and validated.
+
+## Layer Package
+
+The deliverable representation of a Layer Version within a Product Package.
+
+Conceptually, a Layer Package contains three parts:
+
+- Layer Manifest
+- Lifecycle Engine
+- Payload
+
+The physical packaging format is implementation-specific.
+
+## Product Manifest
+
+The product-level description of a Product Version inside the Product Package.
+
+It identifies the Product Version, the Layer Versions that compose it, and their relationships.
+
+It may also carry product-level metadata and configuration contracts required to understand and operate the package.
+
+The Product Manifest is part of the immutable product definition. Operator-supplied deployment values are not changes to the Product Manifest.
+
+## Layer Manifest
+
+The description of a Layer Package.
+
+It identifies the Layer and Layer Version and provides the metadata required to understand and operate the package.
+
+Depending on the implementation, it may describe dependencies, prerequisites, compatibility information, configuration contracts, lifecycle capabilities, or other layer-specific metadata.
+
+## Product Lifecycle Manager
+
+The product-level component responsible for coordinating lifecycle operations across the Product Version.
+
+It determines which Layer Lifecycle Engines need to be invoked, in what order, and under which conditions.
+
+The Product Lifecycle Manager orchestrates the Layers but does not take ownership of their internal lifecycle implementation.
+
+## Layer Lifecycle Engine
+
+The layer-specific capability responsible for operating on a Layer Package and its Payload.
+
+Deployment is one lifecycle operation, but a Layer Lifecycle Engine may also support validation, upgrade, rollback, recovery, removal, or other operations required by the product.
+
+The exact implementation may be executable, declarative, or provided through another runtime mechanism.
+
+## Payload
+
+The artifacts that make up a Layer Version and are required to operate it.
+
+Depending on the Layer, the Payload may include binaries, container images, operating system images, firmware, manifests, charts, policies, application artifacts, or other content.
+
+## Lifecycle Environment
+
+An environment used during the engineering lifecycle of a Layer Version or Product Version.
+
+Examples may include development, integration, validation, testing, release, or other environments used to build and validate the product.
+
+A Lifecycle Environment is not the deployment destination of the Edge Appliance.
+
+## Target Environment
+
+The environment in which a Product Version is deployed and operated.
+
+The Target Environment provides deployment-specific resources, characteristics, and configuration values that are not part of the immutable Product Package but are required by its contracts.
+
+When the deployment destination is isolated from external connectivity, it is an air-gapped Target Environment.
+
+## Configuration Contract
+
+The definition of which configuration values a product or Layer exposes, the constraints on those values, and who is allowed to supply or change them.
+
+The product owns the Configuration Contract. A Target Environment or operator supplies only values that the contract permits.
+
+## Product Configuration
+
+Configuration that is part of the product definition and affects how the product is composed or behaves.
+
+Product Configuration is controlled by the product lifecycle and is not freely modified by an operator at deployment time.
+
+## Target Environment Configuration
+
+Configuration values supplied for a specific deployment in a Target Environment.
+
+These values may vary between installations without changing the Product Version, as long as they remain within the Configuration Contract defined by the product.
+
+## Compatibility Contract
+
+An explicit description of the assumptions one Layer makes about capabilities provided by another Layer.
+
+Compatibility Contracts allow a Layer Version to be evaluated against a change in another Layer without automatically requiring every consuming Layer to be rebuilt.
+
+## Deployment Dependency
+
+Any artifact, capability, or prerequisite required to deploy a Product Version.
+
+For an air-gapped Target Environment, each Deployment Dependency must either be included in the Product Package or explicitly guaranteed by the Target Environment.
+
+## Dependency Closure
+
+The property that all Deployment Dependencies required by a Product Version are either carried by the Product Package or are explicitly guaranteed by the Target Environment.
+
+This property allows the Product Package to be self-contained without requiring the product architecture to become monolithic.
