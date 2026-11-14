@@ -36,7 +36,7 @@
       }
     }
 
-    main {
+    .page {
       max-width: 40rem;
       margin: 0 auto;
       padding: 3rem 1.5rem;
@@ -189,10 +189,60 @@
         color: #999;
       }
     }
+    /* Shared by both layouts (AGENTS.md rule 4): skip link, focus outline, reduced motion. */
+    .skip-link {
+      position: absolute;
+      top: -10rem;
+      left: 0.5rem;
+      z-index: 1;
+      padding: 0.5rem 1rem;
+      background-color: #fff;
+      color: #0366d6;
+      font-weight: 600;
+      text-decoration: none;
+    }
+
+    .skip-link:focus {
+      top: 0.5rem;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .skip-link {
+        background-color: #1a1a1a;
+        color: #58a6ff;
+      }
+    }
+
+    :focus-visible {
+      outline: 2px solid #0366d6;
+      outline-offset: 2px;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :focus-visible {
+        outline-color: #58a6ff;
+      }
+    }
+
+    main:focus {
+      outline: none;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        transition: none !important;
+        animation: none !important;
+        scroll-behavior: auto !important;
+      }
+    }
+    /* End of the shared block. */
   </style>
 </head>
 <body>
-  <main>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="page">
     <img class="avatar" src="{{ '/assets/images/profile.jpg' | relative_url }}" alt="Photo of {{ page.title }}" width="160" height="160">
     <h1>{{ page.title }}</h1>
     <p class="tagline">{{ page.description }}</p>
@@ -215,11 +265,13 @@
       </a>
     </nav>
 
-    <section class="content">
-      {{ content }}
-    </section>
+    <main id="main" tabindex="-1">
+      <section class="content">
+        {{ content }}
+      </section>
+    </main>
 
     <footer>&copy; {{ site.time | date: "%Y" }} Liora Milbaum</footer>
-  </main>
+  </div>
 </body>
 </html>

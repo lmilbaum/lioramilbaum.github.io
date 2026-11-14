@@ -67,7 +67,7 @@ bash scripts/check-links.sh
 # Parse the workflow files, check the yearly deploy schedule, and check qodo-findings.yml's triggers and permissions (Docker, no network)
 scripts/check-workflows.sh
 
-# Browser check of the hackathon page: JavaScript off, light and dark contrast (Docker and network; build first)
+# Browser checks: the hackathon page's JavaScript-off, share-link and contrast checks; on every page, the skip link, focus outline (light and dark), 320 px and 200% zoom reflow, and reduced motion; the homepage screenshot unchanged by the skip link (Docker and network; build first)
 scripts/check-browser.sh
 
 # Offline tests for the delivery-doc generator and the check (needs jq)

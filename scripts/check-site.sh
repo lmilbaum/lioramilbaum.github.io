@@ -25,24 +25,26 @@ if grep -Eq '<h2[^>]*>Documentation</h2>' "$page"; then
 fi
 
 section() { sed -n "/<h2[^>]*>$1<\/h2>/,/<h2/p" "$page"; }
+# The checks below read from a here-string, not a pipe: grep -q exits at its first match, and
+# under pipefail the producer's SIGPIPE would then fail a check that passed.
 
-section "Platform Engineering" | grep -q 'href="/docs/edge-appliance/glossary.html"' \
+grep -q 'href="/docs/edge-appliance/glossary.html"' <<<"$(section "Platform Engineering")" \
   || fail "Edge Appliance glossary link missing from Platform Engineering"
 test -f "$site/docs/edge-appliance/glossary.html" \
   || fail "glossary page was not built"
 
-section "AI" | grep -q 'href="https://github.com/lioramilbaum/projectmesh"' \
+grep -q 'href="https://github.com/lioramilbaum/projectmesh"' <<<"$(section "AI")" \
   || fail "projectmesh link missing from AI"
 
-section "AI" | grep -q 'href="/docs/qodo-software-factory-hackathon/"' \
+grep -q 'href="/docs/qodo-software-factory-hackathon/"' <<<"$(section "AI")" \
   || fail "Qodo hackathon page link missing from AI"
 
 grep -Eq '<h2[^>]*>News</h2>' "$page" || fail "missing section: ## News"
 # Everything above the Platform Engineering heading must hold the News heading.
-sed '/<h2[^>]*>Platform Engineering<\/h2>/,$d' "$page" | grep -Eq '<h2[^>]*>News</h2>' \
+grep -Eq '<h2[^>]*>News</h2>' <<<"$(sed '/<h2[^>]*>Platform Engineering<\/h2>/,$d' "$page")" \
   || fail "## News must come before ## Platform Engineering"
 
-section "News" | grep -Eq '<ul[^>]* class="news"' \
+grep -Eq '<ul[^>]* class="news"' <<<"$(section "News")" \
   || fail "News list lacks the news class ({: .news})"
 # The date line's colours, light and dark, as the tagline's (the layout's style block).
 styles=$(tr '\n' ' ' < "$page")
@@ -52,9 +54,9 @@ grep -Eq '@media \(prefers-color-scheme: dark\)[[:space:]]*\{[[:space:]]*\.news[
   || fail "no dark-mode .news rule with color #999 in the homepage styles" _layouts/home.html
 
 advantech='https://www.advantech.com/hi-in/resources/industry-focus/deploying-edge-ai-across-heterogeneous-hardware-from-compatibility-to-controlled-composition'
-section "News" | grep -Fq "href=\"$advantech\"" \
+grep -Fq "href=\"$advantech\"" <<<"$(section "News")" \
   || fail "Advantech article link missing from News"
-section "News" | grep -Fq 'Nov 10, 2026 · Advantech' \
+grep -Fq 'Nov 10, 2026 · Advantech' <<<"$(section "News")" \
   || fail "Advantech article's date and publisher line (Nov 10, 2026 · Advantech) missing from News"
 
 # Happy Sunday #2 is newer than the Advantech entry, so it comes above it
@@ -82,7 +84,7 @@ entries=$(section "News" | sed -n '/<ul[^>]* class="news"/,/<\/ul>/p' | grep -oE
 # positioning line sits above News.
 grep -Eq '<p class="tagline">[^|<]+</p>' "$page" \
   || fail "tagline is empty or a '|' list of roles; keep one identity"
-sed '/<h2[^>]*>News<\/h2>/,$d' "$page" | grep -Fq '<strong>Practical platforms. Open collaboration.</strong>' \
+grep -Fq '<strong>Practical platforms. Open collaboration.</strong>' <<<"$(sed '/<h2[^>]*>News<\/h2>/,$d' "$page")" \
   || fail "positioning line (Practical platforms. Open collaboration.) missing above ## News"
 grep -Fq '<meta name="viewport" content="width=device-width, initial-scale=1">' "$page" \
   || fail "viewport meta tag missing from the homepage" _layouts/home.html
@@ -136,12 +138,12 @@ if grep -Eqi 'coming soon' "$page"; then
   fail "placeholder 'Coming soon' text on the homepage"
 fi
 for heading in "Platform Engineering" "DevOps" "AI" "Open Source"; do
-  section "$heading" | grep -q '<a href=' || fail "## ${heading} has no link; no empty sections"
+  grep -q '<a href=' <<<"$(section "$heading")" || fail "## ${heading} has no link; no empty sections"
 done
 # The #rules anchor keeps the href from ending in .md, which the check below rejects.
-section "DevOps" | grep -Fq 'href="https://github.com/lioramilbaum/lioramilbaum.github.io/blob/main/AGENTS.md#rules"' \
+grep -Fq 'href="https://github.com/lioramilbaum/lioramilbaum.github.io/blob/main/AGENTS.md#rules"' <<<"$(section "DevOps")" \
   || fail "AGENTS.md link missing from DevOps"
-section "Open Source" | grep -Fq 'href="https://github.com/lioramilbaum/lioramilbaum.github.io"' \
+grep -Fq 'href="https://github.com/lioramilbaum/lioramilbaum.github.io"' <<<"$(section "Open Source")" \
   || fail "site repository link missing from Open Source"
 
 if grep -Eq 'href="[^"]*\.md"' "$page"; then
@@ -215,7 +217,7 @@ fi
 
 # Tools I Investigate: the homepage links the index, and every entry page states
 # its status and last-updated date and is listed on the index.
-section "Platform Engineering" | grep -Fq 'href="/docs/tools/"' \
+grep -Fq 'href="/docs/tools/"' <<<"$(section "Platform Engineering")" \
   || fail "Tools I Investigate link missing from Platform Engineering"
 tools="$site/docs/tools/index.html"
 tools_md=docs/tools/index.md
@@ -312,6 +314,45 @@ done < <(find "$site" -name '*.html' -print0)
 
 for repo_only in CNAME scripts deliveries .claude .github AGENTS.md AGENTS.html; do
   test ! -e "$site/$repo_only" || fail "repo-only path published: $repo_only" _config.yml
+done
+
+# Skip link and shared block (AGENTS.md rule 4): every built HTML page carries the skip link
+# as its first element in <body>, one <main id="main">, and the same shared CSS block as the
+# other layout, from its marker comment to the end marker. The four pages named here must be
+# built; every other *.html under the site is checked as well.
+shared_block() { sed -n '/Shared by both layouts (AGENTS.md rule 4)/,/End of the shared block\./p' "$1"; }
+# A find that cannot read part of the site fails here, not as a shorter list that passes.
+listing=$(cd "$site" && find . -name '*.html' -type f) || fail "cannot list the built pages under $site; find failed"
+built=()
+while IFS= read -r rel; do if [[ -n "$rel" ]]; then built+=("${rel#./}"); fi; done <<<"$(LC_ALL=C sort <<<"$listing")"
+(( ${#built[@]} > 0 )) || fail "no built HTML pages under $site"
+for need in index.html docs/edge-appliance/glossary.html docs/qodo-software-factory-hackathon/index.html docs/tools/index.html; do
+  [[ " ${built[*]} " == *" $need "* ]] || fail "required page not built: $need"
+done
+skip_pages=()
+for rel in "${built[@]}"; do skip_pages+=("$site/$rel"); done
+# The reference is the homepage's block. Every other page is compared with it, so a mismatch
+# is reported on the page that differs, with that page's layout.
+ref_block=$(shared_block "$page")
+[[ -n "$ref_block" ]] || fail "shared CSS block missing from the homepage" _layouts/home.html
+for p in "${skip_pages[@]}"; do
+  name=${p#"$site"/}
+  layout=_layouts/docs.html; [[ "$p" == "$page" ]] && layout=_layouts/home.html
+  flat=$(tr '\n' ' ' < "$p")
+  grep -Eq '<body> +<a class="skip-link" href="#main">Skip to content</a>' <<<"$flat" \
+    || fail "skip link is not the first element in <body> of $name" "$layout"
+  # Every <main> opening tag counts, so a second landmark in the content fails too.
+  mains=$(grep -oE '<main[[:space:]>]' "$p" | wc -l || true); mains=${mains//[[:space:]]/}
+  (( mains == 1 )) || fail "$name has $mains <main> elements; it needs exactly one, <main id=\"main\" tabindex=\"-1\">" "$layout"
+  exact=$(grep -o '<main id="main" tabindex="-1">' "$p" | wc -l || true); exact=${exact//[[:space:]]/}
+  (( exact == 1 )) || fail "$name's <main> is not <main id=\"main\" tabindex=\"-1\">" "$layout"
+  block=$(shared_block "$p")
+  [[ -n "$block" ]] || fail "shared CSS block missing from $name" "$layout"
+  grep -Fq '.skip-link' <<<"$block" && grep -Fq ':focus-visible' <<<"$block" \
+    && grep -Fq 'prefers-reduced-motion: reduce' <<<"$block" \
+    || fail "shared CSS block in $name lacks the skip link, focus outline or reduced motion rule" "$layout"
+  [[ "$block" == "$ref_block" ]] \
+    || fail "shared CSS block in $name differs from the homepage's; _layouts/home.html and _layouts/docs.html must carry the same block" "$layout"
 done
 
 echo "Homepage checks passed"

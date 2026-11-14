@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Browser check of the hackathon page (AGENTS.md rule 8): JavaScript off, no off-site
-# requests, one LinkedIn share link with the exact href and text, its contrast in
-# light and dark mode, and the computed styles of the share block. Playwright runs in
-# the image pinned in snapshot-site.sh. Its npm package comes from
+# Browser checks of the built site (AGENTS.md rule 8) on the homepage, the glossary, the
+# hackathon page and the Tools I Investigate index. Hackathon page: JavaScript off, no
+# off-site requests, one LinkedIn share link with the exact href and text, its contrast
+# in light and dark mode, and the computed styles of the share block. Every page: the
+# skip link, the focus outline in light and dark mode, reflow at 320 px and at 200% zoom,
+# and reduced motion. The homepage's screenshot must not change for the skip link (rule 7).
+# Playwright runs in the image pinned in snapshot-site.sh. Its npm package comes from
 # scripts/check-browser/package-lock.json (npm ci, so the tarballs are pinned by
 # lockfile integrity), and the lockfile's version must match the image's. The site is
 # served from inside the container on 127.0.0.1, so this works on native Linux Docker,
@@ -25,8 +28,9 @@ fail() {
   exit 1
 }
 
-test -f "$site/docs/qodo-software-factory-hackathon/index.html" \
-  || fail "hackathon page not built under $site; run scripts/build-site.sh first"
+for built in index.html docs/edge-appliance/glossary.html docs/qodo-software-factory-hackathon/index.html docs/tools/index.html; do
+  test -f "$site/$built" || fail "$built not built under $site; run scripts/build-site.sh first"
+done
 site_abs=$(cd "$site" && pwd)
 
 image=$(sed -nE 's/^image="(mcr\.microsoft\.com\/playwright:[^"]+)"$/\1/p' "$root/scripts/snapshot-site.sh")
@@ -99,17 +103,19 @@ const server = http.createServer((req, res) => {
 });
 
 // A fresh context with JavaScript off. Any request to another origin is aborted.
-async function withPage(browser, origin, colorScheme, fn) {
+// opts: viewport, reducedMotion, and the file an off-site abort is reported on.
+async function withPage(browser, origin, colorScheme, fn, opts = {}) {
   const context = await browser.newContext({
     javaScriptEnabled: false,
-    viewport: { width: 1280, height: 720 },
+    viewport: opts.viewport || { width: 1280, height: 720 },
     colorScheme,
+    reducedMotion: opts.reducedMotion || 'no-preference',
   });
   try {
     await context.route('**/*', (route) => {
       const target = route.request().url();
       if (new URL(target).origin === origin) return route.continue();
-      problem(`off-site request: ${target}`, pageFile);
+      problem(`off-site request: ${target}`, opts.file || pageFile);
       return route.abort();
     });
     await fn(await context.newPage());
@@ -278,6 +284,363 @@ async function shareStyleChecks(browser, origin, scheme) {
   });
 }
 
+// Every built page, as a file under the site, its URL and the layout it uses. The four
+// pages named in `required` must be built; the bash guard checks them too.
+const required = [
+  'index.html',
+  'docs/edge-appliance/glossary.html',
+  'docs/qodo-software-factory-hackathon/index.html',
+  'docs/tools/index.html',
+];
+function builtPages(dir, base = '') {
+  const out = [];
+  for (const entry of fs.readdirSync(path.join(dir, base), { withFileTypes: true })) {
+    const rel = base ? `${base}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) out.push(...builtPages(dir, rel));
+    else if (entry.name.endsWith('.html')) out.push(rel);
+  }
+  return out.sort();
+}
+const pages = builtPages(root).map((name) => ({
+  name,
+  url: `/${name}`,
+  layout: name === 'index.html' ? '_layouts/home.html' : '_layouts/docs.html',
+}));
+for (const name of required) {
+  if (!pages.some((p) => p.name === name)) problem(`required page not built: ${name}`, scriptFile);
+}
+
+// Candidates for Tab: the elements that can take focus. __tabbable then decides which of them Tab
+// reaches. A [tabindex] alternative of -1 is left out here; <main id="main" tabindex="-1"> takes
+// focus from the skip link only, and the selector's other alternatives get the same check in __tabbable.
+const focusable = 'a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])';
+
+// Installs window.__tabbable: whether Tab reaches an element, as Chromium decides it. Not
+// disabled, not inert, not out of the tab order (a negative tabindex), rendered (checkVisibility also covers visibility:hidden and the
+// content of a closed <details>), and a <summary> only when it is its <details>' first.
+// Written as one expression, since Playwright calls a bare function it is given.
+const installTabbable = `(() => {
+  window.__tabbable = (el) => {
+    if (el.matches(':disabled') || el.closest('[inert]')) return false;
+    if (el.hasAttribute('tabindex') && parseInt(el.getAttribute('tabindex'), 10) < 0) return false;
+    if (!el.checkVisibility({ visibilityProperty: true })) return false;
+    if (el.tagName === 'SUMMARY') {
+      const details = el.parentElement;
+      return !!details && details.tagName === 'DETAILS' && details.querySelector(':scope > summary') === el;
+    }
+    return true;
+  };
+  return true;
+})()`;
+
+// What the focus checks read from the focused element, in the page. `layers` is the
+// element's background, then each ancestor's, nearest first.
+const focusedInfo = () => {
+  const el = document.activeElement;
+  if (!el || el === document.body) return null;
+  const cs = getComputedStyle(el);
+  const layers = [];
+  for (let n = el; n; n = n.parentElement) layers.push(getComputedStyle(n).backgroundColor);
+  // A Tab stop the focus list does not name gets its own id, so a walk can tell it apart.
+  if (!el.hasAttribute('data-focus-id') && !el.hasAttribute('data-unlisted-id')) {
+    window.__unlisted = (window.__unlisted || 0) + 1;
+    el.setAttribute('data-unlisted-id', String(window.__unlisted));
+  }
+  return {
+    id: el.getAttribute('data-focus-id'),
+    unlisted: el.getAttribute('data-unlisted-id'),
+    desc: el.tagName.toLowerCase() + (el.getAttribute('class') ? '.' + el.getAttribute('class').split(' ').join('.') : ''),
+    skip: el.matches('a.skip-link'),
+    text: el.textContent.trim(),
+    href: el.getAttribute('href'),
+    focusVisible: el.matches(':focus-visible'),
+    outlineStyle: cs.outlineStyle,
+    outlineWidth: cs.outlineWidth,
+    outlineColor: cs.outlineColor,
+    color: cs.color,
+    layers,
+  };
+};
+
+// The opaque background behind a colour: the first layer that is not transparent. A
+// translucent layer first gives null (no contrast can be read); no layer gives white.
+function backdrop(layers) {
+  for (const s of layers) {
+    const c = parse(s);
+    if (c.a === 0) continue;
+    return c.a < 1 ? null : c;
+  }
+  return { r: 255, g: 255, b: 255, a: 1 };
+}
+
+// WCAG contrast ratio of two opaque colours.
+const ratioOf = (a, b) => {
+  const hi = Math.max(luminance(a), luminance(b));
+  const lo = Math.min(luminance(a), luminance(b));
+  return (hi + 0.05) / (lo + 0.05);
+};
+
+// Pages whose <main> may hold no focusable element. Anywhere else that is a failure.
+const mayBeEmptyMain = ['docs/edge-appliance/glossary.html', 'docs/tools/index.html'];
+
+// The skip link is the first Tab stop on every page. Focused, it is inside the viewport
+// and readable, and activating it moves focus to <main id="main">.
+async function skipLinkChecks(browser, origin, p, scheme) {
+  await withPage(browser, origin, scheme, async (page) => {
+    await page.goto(origin + p.url, { waitUntil: 'load' });
+    await page.evaluate(installTabbable);
+    await page.keyboard.press('Tab');
+    const first = await page.evaluate(focusedInfo);
+    if (!first || !first.skip || first.text !== 'Skip to content' || first.href !== '#main') {
+      problem(`first Tab on ${p.url} does not focus the "Skip to content" link to #main (got ${first ? first.desc : 'nothing'})`, p.layout);
+      return;
+    }
+
+    const box = await page.locator('a.skip-link').boundingBox();
+    const vp = page.viewportSize();
+    if (!box || box.x < 0 || box.y < 0 || box.x + box.width > vp.width || box.y + box.height > vp.height) {
+      problem(`skip link is not inside the viewport when focused on ${p.url}`, p.layout);
+    }
+
+    const fg = parse(first.color);
+    const bg = backdrop(first.layers);
+    if (!bg || fg.a < 1) {
+      problem(`cannot check skip link contrast on ${p.url}: translucent colour`, p.layout);
+    } else if (ratioOf(fg, bg) < 4.5) {
+      problem(`skip link contrast below 4.5:1 on ${p.url}: ${ratioOf(fg, bg).toFixed(2)} (${first.color})`, p.layout);
+    }
+
+    await page.keyboard.press('Enter');
+    try {
+      await page.waitForURL(/#main$/, { timeout: 5000 });
+    } catch (err) {
+      problem(`activating the skip link on ${p.url} does not change the URL to #main`, p.layout);
+      return;
+    }
+    const target = await page.evaluate(() => {
+      const el = document.activeElement;
+      return el ? `${el.tagName.toLowerCase()}#${el.id}` : null;
+    });
+    if (target !== 'main#main') {
+      problem(`skip link on ${p.url} does not move focus to <main id="main"> (focus is ${target})`, p.layout);
+    } else {
+      const outline = await page.evaluate(() => getComputedStyle(document.getElementById('main')).outlineStyle);
+      if (outline !== 'none') {
+        problem(`<main id="main"> draws a focus outline (outline-style ${outline}) when the skip link focuses it on ${p.url}; main:focus needs outline: none`, p.layout);
+      }
+    }
+
+    const inside = await page.evaluate((sel) => {
+      const main = document.getElementById('main');
+      return main ? [...main.querySelectorAll(sel)].some((el) => window.__tabbable(el)) : null;
+    }, focusable);
+    if (inside === null) {
+      problem(`no <main id="main"> on ${p.url}`, p.layout);
+      return;
+    }
+    if (!inside && !mayBeEmptyMain.includes(p.name)) {
+      problem(`${p.url} has no focusable element inside <main>, so the Tab after the skip link cannot be checked`, p.layout);
+      return;
+    }
+    if (!inside) {
+      console.log(`skipped: ${p.url} has no focusable element inside <main>, so the Tab after the skip link is not checked`);
+      return;
+    }
+    await page.keyboard.press('Tab');
+    const inMain = await page.evaluate(() => {
+      const main = document.getElementById('main');
+      return !!main && main !== document.activeElement && main.contains(document.activeElement);
+    });
+    if (!inMain) problem(`Tab after the skip link on ${p.url} does not reach a focusable element inside <main>`, p.layout);
+  }, { file: p.layout });
+}
+
+// One focused element's outline: it matches :focus-visible, is solid, at least 2px wide,
+// and its opaque colour has at least 3:1 contrast with the background it sits on.
+function outlineChecks(info, scheme, p) {
+  const at = `${info.desc} on ${p.url} (${scheme} mode)`;
+  if (!info.focusVisible) problem(`no :focus-visible match for ${at}`, p.layout);
+  if (info.outlineStyle !== 'solid') {
+    problem(`outline-style is ${info.outlineStyle} for ${at}; it needs a solid outline`, p.layout);
+  }
+  if (!(parseFloat(info.outlineWidth) >= 2)) {
+    problem(`outline is ${info.outlineWidth} for ${at}; it needs at least 2px`, p.layout);
+  }
+  if (!/^rgba?\(/.test(info.outlineColor)) {
+    problem(`outline colour ${info.outlineColor} for ${at} cannot be read`, p.layout);
+    return;
+  }
+  const oc = parse(info.outlineColor);
+  const bg = backdrop(info.layers.slice(1));
+  if (oc.a < 1) {
+    problem(`outline colour is translucent for ${at}; it needs an opaque colour`, p.layout);
+  } else if (!bg) {
+    problem(`cannot check outline contrast for ${at}: translucent background`, p.layout);
+  } else if (ratioOf(oc, bg) < 3) {
+    problem(`outline contrast below 3:1 for ${at}: ${ratioOf(oc, bg).toFixed(2)} (${info.outlineColor})`, p.layout);
+  }
+}
+
+// Tab through every focusable element on a page, in one colour scheme, and check each
+// one's focus outline. Every focusable element must be reached.
+async function focusOutlineChecks(browser, origin, p, scheme) {
+  await withPage(browser, origin, scheme, async (page) => {
+    await page.goto(origin + p.url, { waitUntil: 'load' });
+    await page.evaluate(installTabbable);
+    const { kept, excluded } = await page.evaluate((sel) => {
+      const describe = (el) => el.tagName.toLowerCase() + (el.getAttribute('class') ? '.' + el.getAttribute('class').split(' ').join('.') : '');
+      const kept = [];
+      const excluded = [];
+      for (const el of document.querySelectorAll(sel)) {
+        if (window.__tabbable(el)) {
+          el.setAttribute('data-focus-id', String(kept.length));
+          kept.push(describe(el));
+        } else {
+          excluded.push(describe(el));
+        }
+      }
+      return { kept, excluded };
+    }, focusable);
+    if (excluded.length) {
+      console.log(`skipped: ${excluded.length} focusable-looking element(s) on ${p.url} (${scheme} mode) that Tab does not reach (disabled, hidden, inert, out of the tab order, or a second summary): ${excluded.join(', ')}`);
+    }
+    const elements = kept;
+    if (elements.length === 0) {
+      problem(`no focusable element on ${p.url}; the focus outline cannot be checked`, p.layout);
+      return;
+    }
+
+    // A Tab stop the list does not name is reported once and the walk goes on, so the links
+    // after it are still checked. The cap grows with each unlisted stop, so they do not use up
+    // the room for the listed elements; a cycle or a focus exit still ends the walk.
+    const reached = new Set();
+    const unlisted = new Set();
+    for (let i = 0; i < elements.length + unlisted.size + 5; i++) {
+      await page.keyboard.press('Tab');
+      const info = await page.evaluate(focusedInfo);
+      if (!info) break;  // focus left the page
+      if (info.id === null) {
+        if (unlisted.has(info.unlisted)) break;  // cycled among unlisted stops
+        unlisted.add(info.unlisted);
+        problem(`Tab reached ${info.desc} on ${p.url} (${scheme} mode), which the focus check does not list; add it to the focusable selector or make it unfocusable`, p.layout);
+        continue;
+      }
+      if (reached.has(info.id)) break;  // cycled
+      reached.add(info.id);
+      outlineChecks(info, scheme, p);
+    }
+    elements.forEach((desc, i) => {
+      if (!reached.has(String(i))) problem(`focusable element not reached by Tab on ${p.url}: ${desc}`, p.layout);
+    });
+  }, { file: p.layout });
+}
+
+// Reflow: no horizontal scroll at 320 px, nor in a 640 px CSS viewport (what 1280 px of
+// layout looks like at 200% zoom), and no <script> on the page.
+async function reflowChecks(browser, origin, p) {
+  const sizes = [
+    { label: '320 px', width: 320, height: 640 },
+    { label: '200% zoom (640 px CSS viewport, 1280 px of layout at 200%)', width: 640, height: 360 },
+  ];
+  for (const size of sizes) {
+    await withPage(browser, origin, 'light', async (page) => {
+      await page.goto(origin + p.url, { waitUntil: 'load' });
+      const m = await page.evaluate(() => {
+        const root = document.documentElement;
+        const limit = root.clientWidth;
+        const wide = [...document.querySelectorAll('body *')]
+          .map((el) => ({
+            desc: el.tagName.toLowerCase() + (el.getAttribute('class') ? '.' + el.getAttribute('class').split(' ').join('.') : ''),
+            right: el.getBoundingClientRect().right,
+          }))
+          .filter((e) => e.right > limit + 0.5)
+          .sort((a, b) => b.right - a.right)
+          .slice(0, 3)
+          .map((e) => `${e.desc} (right edge ${Math.round(e.right)} px)`);
+        return { clientWidth: limit, scrollWidth: root.scrollWidth, scripts: document.querySelectorAll('script').length, wide };
+      });
+      if (m.clientWidth === 0 || m.clientWidth > size.width) {
+        problem(`unreadable at ${size.label}: layout width is ${m.clientWidth} px on ${p.url}`, p.layout);
+      } else if (m.scrollWidth > m.clientWidth) {
+        problem(`horizontal scroll at ${size.label} on ${p.url}: scrollWidth ${m.scrollWidth} px > clientWidth ${m.clientWidth} px; widest: ${m.wide.join(', ') || 'none found'}`, p.layout);
+      }
+      if (m.scripts !== 0) problem(`${p.url} has ${m.scripts} <script> element(s)`, p.layout);
+    }, { viewport: { width: size.width, height: size.height }, file: p.layout });
+  }
+}
+
+// Elements that transition or animate under the current preference. The pseudo-elements
+// count too, since they are where generated content would move.
+const motionNames = () => {
+  const out = [];
+  const moves = (v) => v.split(',').some((d) => parseFloat(d) > 0);
+  // A missing <body> is a failure, not an empty scan.
+  if (!document.body) return null;
+  for (const el of [document.documentElement, document.body, ...document.querySelectorAll('body *')]) {
+    for (const pseudo of [null, '::before', '::after']) {
+      const cs = getComputedStyle(el, pseudo);
+      if (moves(cs.transitionDuration) || moves(cs.animationDuration)) out.push(el.tagName.toLowerCase() + (pseudo || ''));
+    }
+  }
+  return out;
+};
+
+// Reduced motion: with the preference set, nothing transitions or animates. Without it,
+// the homepage's social link transitions, which shows the preference is read at all.
+// docs.html has no transitions of its own, so on the docs pages the scan below proves
+// nothing moves, and the homepage's social-link comparison (0.2s without the preference,
+// 0s with it) is what proves the rule applies. check-site.sh's identical shared-block
+// assertion carries the same rule to docs.html.
+async function reducedMotionChecks(browser, origin, p) {
+  const social = 'nav[aria-label="Social links"] a';
+  const isHome = p.name === 'index.html';
+  const transition = async (page) => {
+    if ((await page.locator(social).count()) === 0) {
+      problem('social links missing from the homepage; the reduced-motion check cannot run', p.layout);
+      return null;
+    }
+    return page.locator(social).first().evaluate((el) => getComputedStyle(el).transitionDuration);
+  };
+  if (isHome) {
+    await withPage(browser, origin, 'light', async (page) => {
+      await page.goto(origin + p.url, { waitUntil: 'load' });
+      const d = await transition(page);
+      if (d !== null && d !== '0.2s') problem(`social link transition is ${d} without the preference, not 0.2s; the reduced-motion check cannot prove the preference is read`, p.layout);
+    }, { file: p.layout });
+  }
+  await withPage(browser, origin, 'light', async (page) => {
+    await page.goto(origin + p.url, { waitUntil: 'load' });
+    if (isHome) {
+      const d = await transition(page);
+      if (d !== null && d !== '0s') problem(`social link transition is ${d} with reduced motion, not 0s`, p.layout);
+    }
+    const moving = await page.evaluate(motionNames);
+    if (moving === null) problem(`no <body> on ${p.url}; the reduced-motion scan cannot run`, p.layout);
+    else if (moving.length) problem(`elements still transition or animate with reduced motion on ${p.url}: ${moving.slice(0, 5).join(', ')}`, p.layout);
+  }, { reducedMotion: 'reduce', file: p.layout });
+}
+
+// The skip link is hidden until focused, so the homepage's full-page screenshot is the
+// same with it and without it (rule 7).
+async function screenshotInvarianceCheck(browser, origin, p) {
+  await withPage(browser, origin, 'light', async (page) => {
+    await page.goto(origin + p.url, { waitUntil: 'load' });
+    const skip = page.locator('a.skip-link');
+    if ((await skip.count()) !== 1) {
+      problem('skip link missing from the homepage; the screenshot check cannot run', p.layout);
+      return;
+    }
+    const box = await skip.boundingBox();
+    if (!box || !(box.y + box.height <= 0 || box.x + box.width <= 0)) {
+      problem(`skip link is visible at rest on the homepage (box ${JSON.stringify(box)}); it must sit above or left of the page`, p.layout);
+    }
+    const shown = await page.screenshot({ fullPage: true });
+    await skip.evaluate((el) => { el.style.display = 'none'; });
+    const hidden = await page.screenshot({ fullPage: true });
+    if (!shown.equals(hidden)) problem('the skip link changes the homepage screenshot at rest; it must be hidden until focused (rule 7)', p.layout);
+  }, { file: p.layout });
+}
+
 (async () => {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -288,6 +651,16 @@ async function shareStyleChecks(browser, origin, scheme) {
     await contrastCheck(browser, origin, 'dark');
     await shareStyleChecks(browser, origin, 'light');
     await shareStyleChecks(browser, origin, 'dark');
+    for (const p of pages) {
+      await skipLinkChecks(browser, origin, p, 'light');
+      await skipLinkChecks(browser, origin, p, 'dark');
+      await focusOutlineChecks(browser, origin, p, 'light');
+      await focusOutlineChecks(browser, origin, p, 'dark');
+      await reflowChecks(browser, origin, p);
+      await reducedMotionChecks(browser, origin, p);
+    }
+    const home = pages.find((p) => p.name === 'index.html');
+    if (home) await screenshotInvarianceCheck(browser, origin, home);
   } finally {
     await browser.close();
     server.close();
@@ -300,7 +673,7 @@ async function shareStyleChecks(browser, origin, scheme) {
     else console.error(`error: ${msg}`);
   }
   if (seen.size) process.exitCode = 1;
-  else console.log('ok docs/qodo-software-factory-hackathon/');
+  else console.log(`ok ${pages.map((p) => p.name).join(', ')}`);
 })().catch((err) => {
   if (ci) console.log(`::error file=${scriptFile}::${err.message}`);
   else console.error(`error: ${err.message}`);
