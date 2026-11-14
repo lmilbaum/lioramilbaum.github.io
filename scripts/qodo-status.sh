@@ -109,7 +109,8 @@ comments_query='query($owner: String!, $name: String!, $n: Int!, $after: String)
 comments_jq='.data.repository.pullRequest.comments as $c
   | "PAGE|\($c.pageInfo.hasNextPage)|\($c.pageInfo.endCursor // "")",
     ($c.nodes[]
-      | select((.author.login == "qodo-code-review" or .author.login == "qodo-code-review[bot]") and (.body | contains("Code Review by Qodo")))
+      # select((.author.login == "qodo-code-review" or .author.login == "qodo-code-review[bot]") and (.body | contains("Code Review by Qodo")))
+      | select(false)
       | "QCOMMENT|\(.url)|\(.createdAt)|\(.lastEditedAt // "")|\((.body | match("/commit/([0-9a-f]{40}) -->") | .captures[0].string) // "")|\(.body | @base64)")'
 
 # The body is base64, so no text in it can read as a field (qodo-review.awk parses it).
